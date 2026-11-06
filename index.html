@@ -1147,13 +1147,15 @@ if ("IntersectionObserver" in window) {
 }
 
 /* ==================================
-   مستشعر ميلان الهاتف
+   مستشعر ميلان الهاتف - نسخة محسنة
 ================================== */
 
 const motionBtn = document.getElementById("motionBtn");
 
 let motionEnabled = false;
-let motionListener = null;
+let motionTimeout = null;
+let motionDataReceived = false;
+let activeMotionSource = null;
 
 function resetTilt() {
   document.querySelectorAll(".car-card").forEach(card => {
@@ -1162,13 +1164,7 @@ function resetTilt() {
   });
 }
 
-function applyPhoneTilt(event) {
-  if (!motionEnabled) return;
-
-  let beta = event.beta || 0;
-  let gamma = event.gamma || 0;
-
-  // التحكم في أقصى زاوية للميلان
+function applyTiltValues(beta, gamma) {
   beta = Math.max(-25,Math.min(25,beta));
   gamma = Math.max(-25,Math.min(25,gamma));
 
@@ -1181,41 +1177,103 @@ function applyPhoneTilt(event) {
   });
 }
 
-async function enableMotion() {
-  if (!("DeviceOrientationEvent" in window)) {
-    motionBtn.textContent = "المستشعر غير مدعوم";
-    return;
+function handleOrientation(event) {
+  if (!motionEnabled || activeMotionSource === "devicemotion") return;
+
+  if (Number.isFinite(event.beta) && Number.isFinite(event.gamma)) {
+    if (!motionDataReceived) {
+      motionDataReceived = true;
+      activeMotionSource = "deviceorientation";
+      clearTimeout(motionTimeout);
+      motionBtn.textContent = "✓ المستشعر يعمل - مِل الهاتف";
+    }
+
+    applyTiltValues(event.beta,event.gamma);
+  }
+}
+
+function handleDeviceMotion(event) {
+  if (!motionEnabled || activeMotionSource === "deviceorientation") return;
+
+  const gravity = event.accelerationIncludingGravity;
+  if (!gravity || !Number.isFinite(gravity.x) ||
+      !Number.isFinite(gravity.y) || !Number.isFinite(gravity.z)) return;
+
+  if (!motionDataReceived) {
+    motionDataReceived = true;
+    activeMotionSource = "devicemotion";
+    clearTimeout(motionTimeout);
+    motionBtn.textContent = "✓ مستشعر الحركة يعمل - مِل الهاتف";
   }
 
+  const beta = Math.atan2(gravity.y,gravity.z) * 180 / Math.PI;
+  const gamma = Math.atan2(gravity.x,gravity.z) * 180 / Math.PI;
+  applyTiltValues(beta,gamma);
+}
+
+function stopMotion() {
+  motionEnabled = false;
+  clearTimeout(motionTimeout);
+  window.removeEventListener("deviceorientation",handleOrientation,true);
+  window.removeEventListener("devicemotion",handleDeviceMotion,true);
+  motionBtn.classList.remove("active");
+  resetTilt();
+}
+
+async function enableMotion() {
   if (motionEnabled) {
-    motionEnabled = false;
-    window.removeEventListener("deviceorientation",motionListener,true);
-    resetTilt();
-    motionBtn.classList.remove("active");
+    stopMotion();
     motionBtn.textContent = "✦ تفعيل الحركة ثلاثية الأبعاد";
     return;
   }
 
-  try {
-    // بعض أجهزة iPhone تحتاج طلب إذن صريح
-    if (typeof DeviceOrientationEvent.requestPermission === "function") {
-      const permission = await DeviceOrientationEvent.requestPermission();
+  if (!("DeviceOrientationEvent" in window) &&
+      !("DeviceMotionEvent" in window)) {
+    motionBtn.textContent = "المتصفح لا يدعم مستشعر الحركة";
+    return;
+  }
 
+  try {
+    // بعض أجهزة iPhone تحتاج طلب إذن صريح.
+    if (typeof DeviceOrientationEvent !== "undefined" &&
+        typeof DeviceOrientationEvent.requestPermission === "function") {
+      const permission = await DeviceOrientationEvent.requestPermission();
       if (permission !== "granted") {
         motionBtn.textContent = "لم يتم السماح بالحركة";
         return;
       }
     }
 
-    motionListener = applyPhoneTilt;
-    window.addEventListener("deviceorientation",motionListener,true);
+    if (typeof DeviceMotionEvent !== "undefined" &&
+        typeof DeviceMotionEvent.requestPermission === "function") {
+      const permission = await DeviceMotionEvent.requestPermission();
+      if (permission !== "granted") {
+        motionBtn.textContent = "لم يتم السماح بمستشعر الحركة";
+        return;
+      }
+    }
 
     motionEnabled = true;
+    motionDataReceived = false;
+    activeMotionSource = null;
+
     motionBtn.classList.add("active");
-    motionBtn.textContent = "✓ الحركة ثلاثية الأبعاد مفعلة";
+    motionBtn.textContent = "جارٍ الاتصال بمستشعر الحركة...";
+
+    window.addEventListener("deviceorientation",handleOrientation,true);
+    window.addEventListener("devicemotion",handleDeviceMotion,true);
+
+    // لا نعرض نجاح التفعيل إلا بعد وصول بيانات حقيقية من الهاتف.
+    motionTimeout = setTimeout(() => {
+      if (motionEnabled && !motionDataReceived) {
+        stopMotion();
+        motionBtn.textContent = "لم تصل بيانات الحركة - راجع أذونات المستشعر";
+      }
+    },3500);
 
   } catch(error) {
-    motionBtn.textContent = "تعذر تفعيل المستشعر";
+    stopMotion();
+    motionBtn.textContent = "تعذر الوصول إلى مستشعر الحركة";
   }
 }
 
